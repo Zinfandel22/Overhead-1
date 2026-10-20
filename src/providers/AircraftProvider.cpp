@@ -61,7 +61,8 @@ void AircraftProvider::poll() {
   // Throttle when the radar isn't on screen (the scheduler still calls every few
   // seconds, but there's no point fetching/fragmenting the heap if nobody's looking).
   uint32_t nowMs = millis();
-  if (_lastPollMs && nowMs - _lastPollMs < (_fg ? 0u : 60000u)) return;
+  uint32_t gap = _retryGapMs ? _retryGapMs : (_fg ? 0u : 60000u);
+  if (_lastPollMs && nowMs - _lastPollMs < gap) return;
   _local = _s->getString("adsbMode", "cloud") == "local";
   _radiusNm = (float)_s->getInt("adsbRadiusNm", 50);
   _hideGround = _s->getInt("adsbHideGround", 0) != 0;
@@ -72,13 +73,12 @@ void AircraftProvider::poll() {
     if (!host.length()) { _status = ProviderStatus::Error; return; }
     url = "http://" + host + "/data/aircraft.json";
   } else {
-    // Cloud feed over PLAIN HTTP (adsb.lol) so it dodges the ~42 KB contiguous-TLS
-    // floor that makes the HTTPS sources httpsSkip-fail on the no-PSRAM board — the
-    // radar then populates even with the web server up. Same {"ac":[...]} schema as
-    // airplanes.live, so parse() is unchanged. (airplanes.live 301-redirects http->
-    // https, so it can't be used without TLS.)
+    // Cloud feed over HTTPS. adsb.lol now 301-redirects plain HTTP to HTTPS (HTTPClient
+    // can't follow an http->https hop), so the TLS handshake is unavoidable. NetClient
+    // skips the fetch (code -3) while the largest free block is under its TLS floor; we
+    // retry quickly on failure (see _retryGapMs) until the heap allows it.
     char b[96];
-    snprintf(b, sizeof(b), "http://api.adsb.lol/v2/point/%.4f/%.4f/%d",
+    snprintf(b, sizeof(b), "https://api.adsb.lol/v2/point/%.4f/%.4f/%d",
              centerLat(), centerLon(), (int)_radiusNm);
     url = b;
   }
@@ -91,10 +91,13 @@ void AircraftProvider::poll() {
       if (code == 200 && _staged) {
         _ac = std::move(_acStaging); _acStaging.clear(); _staged = false;
         _lastFetched = (uint32_t)time(nullptr);
+        _retryGapMs = 0;
         _status = ProviderStatus::Ready;
       } else {
         // code -3 = heap-floor TLS skip, 429 = rate limited, <0 = connect/timeout,
-        // or a parse miss. Keep the last contacts (Stale).
+        // or a parse miss. Keep the last contacts (Stale). Retry soon: the heap floor
+        // usually clears within seconds, and a -3 skip costs nothing.
+        _retryGapMs = (code == -3) ? 5000u : 15000u;
         _status = _ac.empty() ? ProviderStatus::Error : ProviderStatus::Stale;
         Serial.printf("[adsb] poll code=%d staged=%d (keep %u)\n", code, (int)_staged, (unsigned)_ac.size());
       }

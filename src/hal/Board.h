@@ -22,7 +22,11 @@
 // resistive touch sharing the LCD SPI bus. No PSRAM.
 // Pinout: https://www.lcdwiki.com/4.0inch_ESP32-32E_Display
 
+#ifdef BOARD_CYD35_USBC
+  #define BOARD_NAME            "CYD 3.5\" ST7796 USB-C (ESP32-3248S035)"
+#else
   #define BOARD_NAME            "CYD 4\" ST7796 (ESP32-32E)"
+#endif
 
   // Display (ST7796S over HSPI: GPIO 12/13/14 are native HSPI pins)
   #define PIN_TFT_MOSI          13
@@ -70,6 +74,8 @@
   // the panel orientation + touch-invert below via -D flags (see env cyd28_elegoo in platformio.ini).
 #ifdef BOARD_CYD28_ELEGOO
   #define BOARD_NAME            "CYD 2.8\" ILI9341 USB-C (Elegoo)"
+#elif defined(BOARD_CYD28_USBC)
+  #define BOARD_NAME            "CYD 2.8\" ILI9341 USB-C (BL GPIO27)"
 #else
   #define BOARD_NAME            "CYD 2.8\" ILI9341 (ESP32-2432S028R)"
 #endif
@@ -81,7 +87,9 @@
   #define PIN_TFT_CS            15
   #define PIN_TFT_DC             2
   #define PIN_TFT_RST           -1    // tied to system reset
+#ifndef PIN_TFT_BL
   #define PIN_TFT_BL            21    // backlight, active HIGH
+#endif
   // ORIENTATION — the hard-won fix (see ../Voxalon/yoradio-pio
   // yoRadio/src/displays/displayILI9341.cpp + boards/cyd_common.h):
   //   This panel's ILI9341 is mounted so the chip's MV=1 "landscape" modes

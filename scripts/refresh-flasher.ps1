@@ -3,7 +3,8 @@
 # Each variant lives in its own subdir matching its manifest:
 #   cyd2usb/        (manifest.json)                - ESP32, bootloader+partitions+firmware
 #   elegoo/         (manifest-elegoo.json)          - ESP32, bootloader+partitions+firmware
-#   crowpanel/      (manifest-crowpanel.json)       - ESP32-S3, single merged factory image @0
+#   cyd35-usbc/     (local factory image)          - ESP32, merged full-flash image
+#   crowpanel/      (manifest-crowpanel.json)      - ESP32-S3, single merged factory image @0
 #   crowpanel-adv7/ (manifest-crowpanel-adv7.json)  - ESP32-S3, merged factory image @0 (experimental)
 #   crowpanel-hmi5/ (manifest-crowpanel-hmi5.json)  - ESP32-S3, merged factory image @0 (experimental)
 # boot_app0.bin is shared at the root by both ESP32 manifests and is static (it comes
@@ -51,6 +52,17 @@ Copy-Bin "cyd28_elegoo" "bootloader.bin" "elegoo" "bootloader.bin"
 Copy-Bin "cyd28_elegoo" "partitions.bin" "elegoo" "partitions.bin"
 Copy-Bin "cyd28_elegoo" "firmware.bin"   "elegoo" "firmware.bin"
 
+Build-Env "cyd35_usbc"
+Write-Host "==> building filesystem for cyd35_usbc"
+Remove-Item (Join-Path $build "cyd35_usbc\littlefs.bin") -Force -ErrorAction SilentlyContinue
+& $pio run -e cyd35_usbc -t buildfs
+if ($LASTEXITCODE -ne 0) { throw "filesystem build failed: cyd35_usbc" }
+$python = Join-Path (Split-Path $pio -Parent) "python.exe"
+Write-Host "==> merging cyd35_usbc factory image"
+& $python (Join-Path $PSScriptRoot "merge_esp32_factory.py")
+if ($LASTEXITCODE -ne 0) { throw "factory merge failed: cyd35_usbc" }
+Copy-Bin "cyd35_usbc" "cyd35_usbc_merged.bin" "cyd35-usbc" "cyd35_usbc_merged.bin"
+
 # --- CrowPanel S3 variants (isolated core dir + ITS launcher; merged factory image @0) ---
 $env:PLATFORMIO_CORE_DIR = $crowCore
 try {
@@ -67,6 +79,7 @@ Copy-Bin "crowpanel_hmi5"    "firmware.factory.bin" "crowpanel-hmi5" "firmware.f
 Write-Host "`n--- refreshed flasher bins ---"
 Write-Host ("cyd2usb        = {0} bytes" -f (Get-Item (Join-Path $flash 'cyd2usb\firmware.bin')).Length)
 Write-Host ("elegoo         = {0} bytes" -f (Get-Item (Join-Path $flash 'elegoo\firmware.bin')).Length)
+Write-Host ("cyd35-usbc     = {0} bytes" -f (Get-Item (Join-Path $flash 'cyd35-usbc\cyd35_usbc_merged.bin')).Length)
 Write-Host ("crowpanel      = {0} bytes" -f (Get-Item (Join-Path $flash 'crowpanel\firmware.factory.bin')).Length)
 Write-Host ("crowpanel-adv7 = {0} bytes" -f (Get-Item (Join-Path $flash 'crowpanel-adv7\firmware.factory.bin')).Length)
 Write-Host ("crowpanel-hmi5 = {0} bytes" -f (Get-Item (Join-Path $flash 'crowpanel-hmi5\firmware.factory.bin')).Length)

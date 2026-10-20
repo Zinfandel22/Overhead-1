@@ -78,6 +78,7 @@ private:
   bool     _inflight = false;
   bool     _fg = false;            // Aircraft page in the foreground
   uint32_t _lastPollMs = 0;        // millis() of the last issued fetch
+  uint32_t _retryGapMs = 0;        // min gap before retrying after a failed fetch (0 = none)
   bool     _ctrSet = false;        // centre override active (else observer)
   double   _ctrLat = 0, _ctrLon = 0;
 };

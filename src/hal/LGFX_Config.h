@@ -142,7 +142,11 @@ public:
       cfg.invert           = (CYD_INVERT_DISPLAY != 0);
       cfg.rgb_order        = (CYD_PANEL_RGB_ORDER != 0);  // drop BGR (Board.h)
       cfg.dlen_16bit       = false;
+#ifdef CYD_TOUCH_SHARED_BUS
+      cfg.bus_shared       = true;   // touch shares the display SPI bus
+#else
       cfg.bus_shared       = false;  // touch is on its own bus
+#endif
       _panel.config(cfg);
     }
     {   // Backlight
@@ -162,14 +166,22 @@ public:
       cfg.y_max          = 3700;
       cfg.pin_int        = -1;       // poll pressure (do NOT gate on IRQ — if the
                                      // IRQ doesn't fire, getTouch() never returns true)
-      cfg.bus_shared     = false;
       cfg.offset_rotation = 0;
-      cfg.spi_host       = SPI3_HOST; // VSPI — separate from the display bus
       cfg.freq           = 1000000;
+      cfg.pin_cs         = PIN_TOUCH_CS;
+#ifdef CYD_TOUCH_SHARED_BUS
+      cfg.bus_shared     = true;
+      cfg.spi_host       = SPI2_HOST; // HSPI — same bus as the display
+      cfg.pin_sclk       = PIN_TFT_SCLK;
+      cfg.pin_mosi       = PIN_TFT_MOSI;
+      cfg.pin_miso       = PIN_TFT_MISO;
+#else
+      cfg.bus_shared     = false;
+      cfg.spi_host       = SPI3_HOST; // VSPI — separate from the display bus
       cfg.pin_sclk       = PIN_TOUCH_SCLK;
       cfg.pin_mosi       = PIN_TOUCH_MOSI;
       cfg.pin_miso       = PIN_TOUCH_MISO;
-      cfg.pin_cs         = PIN_TOUCH_CS;
+#endif
       _touch.config(cfg);
       _panel.setTouch(&_touch);
     }
