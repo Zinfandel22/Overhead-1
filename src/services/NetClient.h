@@ -29,13 +29,13 @@ public:
   // so HTTPS fetches (Celestrak, SWPC, Open-Meteo) need >=16 KB or they fail.
   bool begin(uint32_t stackBytes = 16384, BaseType_t core = 0);
   bool get(const String& url, Callback cb);   // returns false if the queue is full
-  bool get(const String& url, Callback cb, StreamParse inTask);   // + in-task stream parse
+  bool get(const String& url, Callback cb, StreamParse inTask, size_t minBlock = 42000);   // + in-task stream parse; minBlock = TLS heap floor
   void poll();                                 // UI thread: dispatch completed jobs
   size_t inFlight() const { return _inFlight; }
   size_t httpsSkips() const { return _httpsSkips; }   // HTTPS jobs skipped at the heap floor
 
 private:
-  struct Job { String url; Callback cb; StreamParse inTask; int code = 0; String body; };
+  struct Job { String url; Callback cb; StreamParse inTask; int code = 0; String body; size_t minBlock = 42000; };
 
   static void taskEntry(void* arg);
   void taskLoop();

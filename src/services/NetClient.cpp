@@ -18,8 +18,9 @@ bool NetClient::begin(uint32_t stackWords, BaseType_t core) {
   return ok == pdPASS;
 }
 
-bool NetClient::get(const String& url, Callback cb, StreamParse inTask) {
+bool NetClient::get(const String& url, Callback cb, StreamParse inTask, size_t minBlock) {
   Job* job = new Job();
+  job->minBlock = minBlock;
   job->url    = url;
   job->cb     = std::move(cb);
   job->inTask = std::move(inTask);
@@ -81,7 +82,7 @@ void NetClient::perform(Job* job) {
     // 8BIT heap here, but is explicit about the pool TLS actually draws from.
     size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
 #endif
-    if (blk < 42000) {
+    if (blk < job->minBlock) {
       job->code = -3;
       _httpsSkips++;
       Serial.printf("[net] skip (low heap, %u total) %.40s\n", (unsigned)_httpsSkips, job->url.c_str());
@@ -99,6 +100,8 @@ void NetClient::perform(Job* job) {
   // straight through it without buffering — avoids a huge contiguous String alloc.
   auto consume = [&]() {
     job->code = http.GET();
+    if (job->code < 0)
+      Serial.printf("[net] GET failed %d (%s) %.50s\n", job->code, HTTPClient::errorToString(job->code).c_str(), job->url.c_str());
     if (job->code > 0) {
       if (job->inTask) job->inTask(job->code, http.getStream());
       else             job->body = http.getString();

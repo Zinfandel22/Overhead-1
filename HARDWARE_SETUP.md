@@ -11,6 +11,7 @@ dashboard. The README is the showcase; this is the "boring but necessary" detail
 |---|---|---|---|---|
 | **2.8" CYD** (ESP32-2432S028R) | `cyd28_ili9341` | 2.8" ILI9341, 320×240, resistive | ESP32-WROOM (no PSRAM) | ✅ **verified** |
 | 4" CYD | `cyd4_st7796` | 4" ST7796 | ESP32-WROOM | ⚠️ WIP (untested on hw) |
+| 3.5" CYD USB-C (ESP32-3248S035R) | `cyd35_usbc` | 3.5" ST7796, 480×320 | ESP32-WROOM (no PSRAM) | ⚠️ running; also emits a merged 4 MB image (`.pio/build/cyd35_usbc/cyd35_usbc_merged.bin`, flash at 0x0) |
 | CrowPanel 5" HMI | `crowpanel_s3_5hmi` | 5" parallel-RGB | ESP32-S3 (PSRAM) | ⚠️ WIP (untested on hw) |
 
 The 2.8" CYD is the reference build. The other two compile and are board-conditional

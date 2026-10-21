@@ -52,15 +52,7 @@ Copy-Bin "cyd28_elegoo" "bootloader.bin" "elegoo" "bootloader.bin"
 Copy-Bin "cyd28_elegoo" "partitions.bin" "elegoo" "partitions.bin"
 Copy-Bin "cyd28_elegoo" "firmware.bin"   "elegoo" "firmware.bin"
 
-Build-Env "cyd35_usbc"
-Write-Host "==> building filesystem for cyd35_usbc"
-Remove-Item (Join-Path $build "cyd35_usbc\littlefs.bin") -Force -ErrorAction SilentlyContinue
-& $pio run -e cyd35_usbc -t buildfs
-if ($LASTEXITCODE -ne 0) { throw "filesystem build failed: cyd35_usbc" }
-$python = Join-Path (Split-Path $pio -Parent) "python.exe"
-Write-Host "==> merging cyd35_usbc factory image"
-& $python (Join-Path $PSScriptRoot "merge_esp32_factory.py")
-if ($LASTEXITCODE -ne 0) { throw "factory merge failed: cyd35_usbc" }
+Build-Env "cyd35_usbc"     # post-script (scripts/merge_esp32_factory.py) emits the merged image
 Copy-Bin "cyd35_usbc" "cyd35_usbc_merged.bin" "cyd35-usbc" "cyd35_usbc_merged.bin"
 
 # --- CrowPanel S3 variants (isolated core dir + ITS launcher; merged factory image @0) ---

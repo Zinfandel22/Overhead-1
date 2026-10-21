@@ -92,7 +92,7 @@ the page it's about**); long-press to **pin**.
 |---|
 | ![Aircraft radar](docs/img/page2-aircraft.jpg) |
 | A north-up **ADS-B radar** with range rings (your range + 5/10 nm reference), per-blip **heading chevrons**, and **dead-reckoned** motion between updates — **including altitude**, so a descending contact's flight-level readout ticks down live between feed updates. Tap a blip → callsign, type, altitude, ground speed + track, distance/bearing, and the **look az/el** (where to point binoculars). An **emergency squawk** (7700/7600/7500) rings the contact and raises a banner, and a plane passing **nearly overhead** (within 5 nm and >20° up) fires a cross-tab "Overhead" alert + tab badge. HOME + airport chips recenter the radar; chips filter range / on-ground / altitude / category. |
-| **The frequency marquee** along the bottom is a sleeper feature: it scrolls the **nearest airport's identifier, name, distance/bearing, and its actual radio frequencies** — ATIS/AWOS, CTAF/UNICOM, clearance, ground, tower, and approach/departure — pulled from a **bundled 3,877-field US airport database** baked into the LittleFS image (so it works without a network). Glance at it to know exactly what to dial up on a scanner to hear the traffic you can see on the radar. *(The cloud ADS-B feed runs over plain HTTP so it populates even under the no-PSRAM heap floor; the radar above is live traffic at a busy metro, with the home location redacted.)* |
+| **The frequency marquee** along the bottom is a sleeper feature: it scrolls the **nearest airport's identifier, name, distance/bearing, and its actual radio frequencies** — ATIS/AWOS, CTAF/UNICOM, clearance, ground, tower, and approach/departure — pulled from a **bundled 3,877-field US airport database** baked into the LittleFS image (so it works without a network). Glance at it to know exactly what to dial up on a scanner to hear the traffic you can see on the radar. *(The cloud ADS-B feed is **adsb.lol over HTTPS** — it moved off plain HTTP in Oct 2026 when adsb.lol began 301-redirecting HTTP to HTTPS. It polls every 15 s on the radar page, 60 s in the background, and backs off on rate limiting; the radar above is live traffic at a busy metro, with the home location redacted.)* |
 
 | ![Aircraft activity board](docs/img/page2-aircraft-activity.jpg) |
 |---|
@@ -281,6 +281,10 @@ non-blocking network task so only one TLS session ever exists; **heap-floor-awar
 that serves stale data instead of running out of memory and crashing; stale-data release
 to keep the heap clear; a **WiFi watchdog** that reconnects and, if needed, reboots; and
 live memory-pressure telemetry (`heapBlkMin`, `httpsSkip`) you can watch in `/api/status`.
+The TLS heap floor is per-request (`NetClient::get(..., minBlock)`, default 42 KB); the
+aircraft feed uses a lower 34 KB floor, and its parse guard accounts for the live TLS
+session's buffers. Aircraft fetches log `[adsb] fetch / ok / FAIL code=… (reason)` over
+serial so a stale or error state on the Health page can be diagnosed.
 
 ---
 
@@ -301,6 +305,12 @@ page: `docs/index.html`.)
 
 Install PlatformIO, `git clone`, build the `cyd28_ili9341` env, flash over USB once, then
 join the `Overhead-setup` WiFi to provision. After that, OTA from your desk.
+
+The `cyd35_usbc` env (3.5" ST7796 USB-C CYD) also emits a single full-flash image on every
+build: `.pio/build/cyd35_usbc/cyd35_usbc_merged.bin` (4 MB: bootloader + partitions + boot_app0 +
+firmware + LittleFS). Flash it at offset 0, e.g. `esptool write_flash 0x0 cyd35_usbc_merged.bin`.
+It is produced by `scripts/merge_esp32_factory.py`, and `scripts/refresh-flasher.ps1` copies it to
+`docs/flash/cyd35-usbc/`.
 
 ---
 

@@ -4,6 +4,7 @@
 #include "../services/LocationService.h"
 #include "../core/EventBus.h"
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <esp_heap_caps.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,6 +13,17 @@
 #include <time.h>
 
 static constexpr double DEG = 3.14159265358979323846 / 180.0;
+
+// Why the last stream parse produced nothing (set on the NET TASK, read after the
+// response is handed back to the UI thread). Diagnostics only.
+static const char* s_parseWhy = "";
+
+// Foreground refresh interval. The cloud feed is HTTPS, so each poll is a full TLS
+// handshake; polling back-to-back (the old 0 ms plain-HTTP cadence) churns the heap
+// and risks adsb.lol rate limiting. 5 s is still a live-feeling radar.
+static constexpr uint32_t kFgPollMs = 15000;   // adsb.lol 429s at 5 s polling
+static constexpr uint32_t kBgPollMs = 60000;
+static constexpr uint32_t kMaxBackoffMs = 300000;
 
 // Great-circle range (nm) + initial bearing (deg from North) observer->target.
 static void relPos(double lat1, double lon1, double lat2, double lon2,
@@ -54,6 +66,8 @@ void AircraftProvider::poll() {
   // NetClient SKIP the very fetch meant to refresh them (a starvation loop). Releasing
   // them lifts the heap back over the floor so the next fetch can run.
   if (!_ac.empty() && _lastFetched && (uint32_t)time(nullptr) - _lastFetched > 60) {
+    Serial.printf("[adsb] state Ready/Stale -> Loading: %u contacts dropped, %us since last good fetch\n",
+                  (unsigned)_ac.size(), (unsigned)((uint32_t)time(nullptr) - _lastFetched));
     _ac.clear(); _ac.shrink_to_fit();
     _status = ProviderStatus::Loading;
     if (_bus) _bus->publish(ProviderId::Aircraft);
@@ -61,7 +75,7 @@ void AircraftProvider::poll() {
   // Throttle when the radar isn't on screen (the scheduler still calls every few
   // seconds, but there's no point fetching/fragmenting the heap if nobody's looking).
   uint32_t nowMs = millis();
-  uint32_t gap = _retryGapMs ? _retryGapMs : (_fg ? 0u : 60000u);
+  uint32_t gap = _retryGapMs ? _retryGapMs : (_fg ? kFgPollMs : kBgPollMs);
   if (_lastPollMs && nowMs - _lastPollMs < gap) return;
   _local = _s->getString("adsbMode", "cloud") == "local";
   _radiusNm = (float)_s->getInt("adsbRadiusNm", 50);
@@ -85,27 +99,48 @@ void AircraftProvider::poll() {
 
   _inflight = true;
   _staged = false;
+  s_parseWhy = "";
+  Serial.printf("[adsb] fetch -> %.60s  (wifi=%d rssi=%d heap=%u blk=%u)\n", url.c_str(),
+                (int)(WiFi.status() == WL_CONNECTED), (int)WiFi.RSSI(),
+                (unsigned)ESP.getFreeHeap(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   bool sent = _net->get(url,
     [this](int code, const String&) {            // UI thread: commit the staged parse
       _inflight = false;
+      ProviderStatus prev = _status;
       if (code == 200 && _staged) {
         _ac = std::move(_acStaging); _acStaging.clear(); _staged = false;
         _lastFetched = (uint32_t)time(nullptr);
         _retryGapMs = 0;
         _status = ProviderStatus::Ready;
+        Serial.printf("[adsb] ok: %u contacts%s\n", (unsigned)_ac.size(),
+                      prev != ProviderStatus::Ready ? "  (recovered)" : "");
       } else {
         // code -3 = heap-floor TLS skip, 429 = rate limited, <0 = connect/timeout,
         // or a parse miss. Keep the last contacts (Stale). Retry soon: the heap floor
         // usually clears within seconds, and a -3 skip costs nothing.
-        _retryGapMs = (code == -3) ? 5000u : 15000u;
+        if (code == 429) {                       // rate limited: back off, doubling up to 5 min
+          uint32_t next = _retryGapMs ? _retryGapMs * 2 : 30000u;
+          _retryGapMs = next > kMaxBackoffMs ? kMaxBackoffMs : next;
+        } else {
+          _retryGapMs = (code == -3) ? 5000u : 15000u;
+        }
         _status = _ac.empty() ? ProviderStatus::Error : ProviderStatus::Stale;
-        Serial.printf("[adsb] poll code=%d staged=%d (keep %u)\n", code, (int)_staged, (unsigned)_ac.size());
+        const char* why = code == -3 ? "TLS heap floor skip" : code == -1 ? "wifi down"
+                        : code == -2 ? "http begin failed" : code < 0 ? "connect/timeout/TLS error"
+                        : code == 200 ? (s_parseWhy[0] ? s_parseWhy : "parse produced nothing")
+                        : code == 429 ? "rate limited" : code == 301 || code == 302 ? "redirect not followed"
+                        : "http error";
+        Serial.printf("[adsb] FAIL code=%d (%s) heap=%u blk=%u keep=%u retry=%ums state %d->%d\n",
+                      code, why, (unsigned)ESP.getFreeHeap(),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                      (unsigned)_ac.size(), (unsigned)_retryGapMs, (int)prev, (int)_status);
       }
       if (_bus) _bus->publish(ProviderId::Aircraft);
     },
     [this](int code, Stream& s) {                // NET TASK: stream-filter into staging
       if (code == 200) parseStream(s);
-    });
+    },
+    kTlsMinBlock);
   if (sent) _lastPollMs = nowMs;
   else      _inflight = false;           // req queue full; retry on the next poll
                                          // (otherwise _inflight sticks -> "scanning" forever)
@@ -122,19 +157,25 @@ void AircraftProvider::parseStream(Stream& body) {
   // allowed to run when the heap was already critically low -> exhaust/fragment ->
   // heap-corruption panic (SW_CPU_RESET, "No core dump found") -> boot loop.
 
-  // The aircraft feed skips NetClient's heap-floor guard (plain HTTP), so gate the
-  // parse here: if the largest free block is too small, bail and keep the last
-  // (stale) contacts rather than risk a corrupting allocation.
-  if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 20000) {
+  // Gate the parse on the heap so a starved board bails (keeping the last contacts)
+  // rather than risk a corrupting allocation. NOTE this runs while the TLS session is
+  // still open (~17 KB+ of live buffers), so the largest block here is far below the
+  // pre-fetch value; the element-by-element parse only needs a few KB (one filtered
+  // object + the reserved 24-contact vector), so the floor is small.
+  static constexpr size_t kParseMinBlock = 6000;
+  size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  Serial.printf("[adsb] parse start blk=%u\n", (unsigned)blk);
+  if (blk < kParseMinBlock) {
     _staged = false;
+    s_parseWhy = "parse skipped: heap block < 6 KB during TLS";
     return;
   }
 
   // Advance the stream to the start of the aircraft array. adsb.lol / airplanes.live
   // use "ac"; tar1090 / readsb use "aircraft". "ac" is a prefix of "aircraft", so
   // find("\"ac") lands on either key; then walk to the array's opening '['.
-  if (!body.find((char*)"\"ac")) return;
-  if (!body.find((char*)"["))   return;
+  if (!body.find((char*)"\"ac")) { s_parseWhy = "no \"ac\" key in body (timeout/empty/non-JSON)"; return; }
+  if (!body.find((char*)"["))   { s_parseWhy = "no array after \"ac\""; return; }
 
   // Per-ELEMENT filter: only the fields we actually use. Applied to each object as
   // it is parsed, so the reused `elem` document stays tiny.

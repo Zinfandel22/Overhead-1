@@ -21,7 +21,26 @@ move out on the next sweep.
   `wcalm`, guards `vis--` + missing temp. Map/METAR/Sounding/Trends verified; TAF +
   Hazards correctly auto-hidden when empty. Selection hit radius widened (12→16px).
 
-### Aircraft feed over plain HTTP — FIXED (Jun 2026)
+### Aircraft feed over plain HTTP — SUPERSEDED (Oct 2026: now HTTPS)
+**Update, Oct 2026:** `api.adsb.lol` began 301-redirecting plain HTTP to HTTPS (cert issued
+~Sun Oct 18). Arduino's `HTTPClient` can't follow an http->https hop, so the feed returned
+`code=301` and the Health page showed Aircraft `Error`. Now fetched over
+`https://api.adsb.lol/v2/point/...`. What it took:
+- **Heap floor:** NetClient's global 42 KB TLS floor skipped every fetch (largest block sat at
+  ~40.9 KB). `NetClient::get(url, cb, inTask, minBlock)` now takes a per-job floor; aircraft
+  uses `AircraftProvider::kTlsMinBlock` = 34 KB (shared with the radar's "mem low" hint).
+- **Parse guard:** the in-task parse ran while the TLS session was still open (~17 KB of live
+  buffers), so its old 20 KB check always failed even on HTTP 200. Lowered to 6 KB.
+- **Rate limiting:** adsb.lol returns 429. Foreground poll is 15 s (background 60 s); a 429
+  backs off 30 s, doubling to a 5 min cap; other failures retry at 5 s (heap skip) / 15 s.
+- **Diagnostics:** serial now logs `[adsb] fetch`, `parse start blk=`, `ok: N contacts` or
+  `FAIL code=… (reason) heap= blk= state a->b`, plus `[net] GET failed` for connect/TLS errors.
+- **Still open:** other HTTPS feeds (NASA, Open-Meteo, aviationweather) are still skipped at the
+  42 KB floor on a ~38.9 KB block; the web server auto-start (~45 s) may eat the thin margin.
+  Possible fixes: lower the shared floor, reuse one TLS client with keep-alive, or gate the web
+  server on the aircraft feed.
+
+**Original (Jun 2026) approach, now obsolete:**
 The cloud ADS-B feed (`https://api.airplanes.live`) was effectively dead on the
 no-PSRAM board: HTTPS needs a ~42 KB contiguous block for the TLS handshake, so
 NetClient httpsSkip'd it whenever the web server / screenshot buffer was up — "feed

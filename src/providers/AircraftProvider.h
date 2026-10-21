@@ -25,6 +25,9 @@ struct Aircraft {
 
 class AircraftProvider {
 public:
+  // Smallest contiguous heap block the cloud (HTTPS) fetch needs; below this NetClient
+  // skips it. Shared with the radar page's "mem low" hint so the two can't disagree.
+  static constexpr size_t kTlsMinBlock = 34000;
   void begin(Settings* s, NetClient* net, EventBus* bus, LocationService* loc);
   void poll();
   // Foreground = Aircraft page is showing -> poll at the scheduler's full rate.
