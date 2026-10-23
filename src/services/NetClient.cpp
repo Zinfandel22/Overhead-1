@@ -4,6 +4,42 @@
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 
+// HTTPClient::getStream() hands back the raw socket, so a Transfer-Encoding: chunked body
+// (adsb.fi) arrives with chunk-size lines embedded in the JSON. This strips them.
+class ChunkedStream : public Stream {
+ public:
+  explicit ChunkedStream(Stream& in) : _in(in) {}
+  int available() override { return _done ? 0 : _in.available(); }
+  int read() override {
+    if (!ensure()) return -1;
+    int c = _in.read();
+    if (c >= 0) _left--;
+    return c;
+  }
+  int peek() override { return ensure() ? _in.peek() : -1; }
+  size_t write(uint8_t) override { return 0; }
+  void flush() override {}
+ private:
+  bool ensure() {
+    if (_done) return false;
+    while (_left == 0) {
+      String line = _in.readStringUntil('\n');      // "<hex>\r" (or the empty CRLF after a chunk)
+      line.trim();
+      if (!line.length()) {
+        if (_started) { _started = false; continue; }
+        _done = true; return false;                 // timeout / closed
+      }
+      _left = (int)strtol(line.c_str(), nullptr, 16);
+      _started = true;
+      if (_left == 0) { _done = true; return false; }
+    }
+    return true;
+  }
+  Stream& _in;
+  int  _left = 0;
+  bool _done = false, _started = false;
+};
+
 bool NetClient::begin(uint32_t stackWords, BaseType_t core) {
   // Depth must cover the boot fan-out (~16 providers refresh at once: TLE x3, SpaceWx x5,
   // launch, aircraft, weather, aviation, pmap, sounding, hazards, mars). An 8-deep queue
@@ -103,7 +139,15 @@ void NetClient::perform(Job* job) {
     if (job->code < 0)
       Serial.printf("[net] GET failed %d (%s) %.50s\n", job->code, HTTPClient::errorToString(job->code).c_str(), job->url.c_str());
     if (job->code > 0) {
-      if (job->inTask) job->inTask(job->code, http.getStream());
+      if (job->inTask) {
+        if (http.getSize() < 0) {                    // chunked: strip the chunk framing
+          ChunkedStream cs(http.getStream());
+          cs.setTimeout(8000);
+          job->inTask(job->code, cs);
+        } else {
+          job->inTask(job->code, http.getStream());
+        }
+      }
       else             job->body = http.getString();
     }
     http.end();

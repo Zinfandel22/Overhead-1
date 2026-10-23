@@ -190,21 +190,27 @@ void PageHealth::draw(App& app) {
   if (loc.valid) { char b[48]; snprintf(b, sizeof(b), "loc %s  %.3f,%.3f", loc.name.c_str(), loc.lat, loc.lon); line(b, gTheme.dim); }
 
   y += 2 * u;
-  g.setTextColor(gTheme.fg, gTheme.bg); g.drawString("provider        status    age", x0, y); y += 12 * u;
+  const int srcPad = 15 * u;                       // source column sits this far right of the age column
+  g.setTextColor(gTheme.fg, gTheme.bg);
+  g.drawString(padRight("provider        status    age", 48), x0, y);
+  g.drawString("source", x0 + g.textWidth("provider        status    age   ") + srcPad, y);
+  y += 12 * u;
   uint32_t now = (uint32_t)time(nullptr);
-  auto prow = [&](const char* name, ProviderStatus st, uint32_t fetched, bool busy, int idx) {
+  auto prow = [&](const char* name, ProviderStatus st, uint32_t fetched, bool busy, int idx, const char* src = "") {
     bool queued = (_rstep >= 0 && idx >= _rstep && !busy);   // waiting its turn in the refresh sequence
     const char* tok = busy ? "fetching" : queued ? "queued" : statusStr(st);
     Color c = busy ? gTheme.accent : queued ? gTheme.dim
             : st == ProviderStatus::Ready ? gTheme.ok : st == ProviderStatus::Error ? gTheme.warn : gTheme.dim;
     char age[12] = "-";
     if (!busy && !queued && fetched > 1600000000UL && now > fetched) fmtDur(now - fetched, age, sizeof(age));  // ignore pre-NTP stamps
-    char b[48]; snprintf(b, sizeof(b), "%-14s  %-8s  %s", name, tok, (busy || queued) ? "" : age);
-    g.setTextColor(c, gTheme.bg); g.drawString(padRight(b, 40), x0, y); y += 12 * u;
+    char b[64]; snprintf(b, sizeof(b), "%-14s  %-8s  %-6s", name, tok, (busy || queued) ? "" : age);
+    g.setTextColor(c, gTheme.bg); g.drawString(padRight(b, 48), x0, y);
+    if (src[0]) g.drawString(src, x0 + g.textWidth("provider        status    age   ") + srcPad, y);
+    y += 12 * u;
   };
   prow("TLE",      _tle.status(),    _tle.lastFetched(),    _tle.fetching(),    0);
   prow("Launch",   _launch.status(), _launch.lastFetched(), _launch.fetching(), 1);
-  prow("Aircraft", _air.status(),    _air.lastFetched(),    _air.fetching(),    2);
+  prow("Aircraft", _air.status(),    _air.lastFetched(),    _air.fetching(),    2, _air.sourceName());
   prow("SpaceWx",  _swx.status(),    _swx.lastFetched(),    _swx.fetching(),    3);
   prow("Weather",  _wx.status(),     _wx.lastFetched(),     _wx.fetching(),     4);
 

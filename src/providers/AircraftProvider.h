@@ -44,6 +44,8 @@ public:
   const std::vector<Aircraft>& aircraft() const { return _ac; }
   ProviderStatus status() const { return _status; }
   uint32_t       lastFetched() const { return _lastFetched; }
+  // Source of the most recent fetch ("adsb.lol", "adsb.fi", "airplanes" or "local"); "" before the first.
+  const char*    sourceName() const { return _srcName; }
   bool           local() const { return _local; }
   bool           fetching() const { return _inflight; }   // a poll is queued/in-flight
   float          radiusNm() const { return _radiusNm; }
@@ -82,6 +84,11 @@ private:
   bool     _fg = false;            // Aircraft page in the foreground
   uint32_t _lastPollMs = 0;        // millis() of the last issued fetch
   uint32_t _retryGapMs = 0;        // min gap before retrying after a failed fetch (0 = none)
+  uint8_t  _src = 0;               // cloud source: 0 = adsb.lol, 1 = opendata.adsb.fi, 2 = airplanes.live
+  const char* _srcName = "";       // source used by the latest fetch (for the Health screen)
+  uint8_t  _failStreak = 0;        // consecutive non-heap failures across sources
+  uint32_t _parkUntilMs[3] = {0, 0, 0};   // millis() until which a 403'd source is skipped
+  uint32_t _park403Ms[3]   = {0, 0, 0};   // current 403 park length per source (escalates)
   bool     _ctrSet = false;        // centre override active (else observer)
   double   _ctrLat = 0, _ctrLon = 0;
 };

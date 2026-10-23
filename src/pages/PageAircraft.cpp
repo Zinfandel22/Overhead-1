@@ -51,6 +51,37 @@ static const char* squawkAlert(const String& sq) {
   return nullptr;
 }
 
+// Airline from the ICAO callsign prefix (e.g. "UAL123" -> United). nullptr if the callsign
+// isn't an airline-style "AAA###" or the prefix isn't in the table.
+static const char* airlineName(const String& flight) {
+  struct Al { const char* p; const char* n; };
+  static const Al kAl[] = {
+    {"UAL","United"},{"AAL","American"},{"DAL","Delta"},{"SWA","Southwest"},{"ASA","Alaska"},
+    {"JBU","JetBlue"},{"NKS","Spirit"},{"FFT","Frontier"},{"HAL","Hawaiian"},{"SKW","SkyWest"},
+    {"RPA","Republic"},{"ENY","Envoy"},{"EDV","Endeavor"},{"QXE","Horizon"},{"FDX","FedEx"},
+    {"UPS","UPS"},{"GTI","Atlas Air"},{"ABX","ABX Air"},{"PAC","Polar Air"},{"CKS","Kalitta"},
+    {"ACA","Air Canada"},{"WJA","WestJet"},{"AMX","Aeromexico"},{"VOI","Volaris"},{"BAW","British Airways"},
+    {"VIR","Virgin Atlantic"},{"AFR","Air France"},{"DLH","Lufthansa"},{"KLM","KLM"},{"SWR","Swiss"},
+    {"IBE","Iberia"},{"RYR","Ryanair"},{"EZY","easyJet"},{"UAE","Emirates"},{"QTR","Qatar"},
+    {"ETD","Etihad"},{"THY","Turkish"},{"SIA","Singapore"},{"CPA","Cathay Pacific"},{"JAL","Japan Air"},
+    {"ANA","All Nippon"},{"KAL","Korean Air"},{"AAR","Asiana"},{"CCA","Air China"},{"CES","China Eastern"},
+    {"CSN","China Southern"},{"EVA","EVA Air"},{"CAL","China Airlines"},{"QFA","Qantas"},{"ANZ","Air NZ"},
+    {"VOZ","Virgin Australia"},{"JST","Jetstar"},{"AIC","Air India"},{"SAS","SAS"},{"FIN","Finnair"},
+    {"AZA","ITA Airways"},{"TAP","TAP Portugal"},{"LOT","LOT"},{"ICE","Icelandair"},{"EIN","Aer Lingus"},
+    {"LAN","LATAM"},{"TAM","LATAM Brasil"},{"AVA","Avianca"},{"CMP","Copa"},{"GLO","Gol"},
+    {"AZU","Azul"},{"VJA","Vistara"},{"THA","Thai"},{"MAS","Malaysia"},{"PAL","Philippine"},
+    {"VNL","Vietnam"},{"GIA","Garuda"},{"SVA","Saudia"},{"ELY","El Al"},{"MSR","EgyptAir"},
+    {"ETH","Ethiopian"},{"SAA","South African"},{"LXJ","Flexjet"},{"EJA","NetJets"},{"EJM","Executive Jet"},
+    {"VTE","Contour"},{"AWI","Air Wisconsin"},{"CPZ","Compass"},{"GJS","GoJet"},{"SCX","Sun Country"},
+    {"AAY","Allegiant"},{"BTA","ExpressJet"},{"MXY","Breeze"},{"CJT","Cargojet"},{"BOX","AeroLogic"},
+  };
+  if (flight.length() < 4) return nullptr;
+  for (int i = 0; i < 3; ++i) if (flight[i] < 'A' || flight[i] > 'Z') return nullptr;
+  if (flight[3] < '0' || flight[3] > '9') return nullptr;
+  for (const Al& e : kAl) if (flight[0] == e.p[0] && flight[1] == e.p[1] && flight[2] == e.p[2]) return e.n;
+  return nullptr;
+}
+
 // ADS-B emitter category code -> class: 0 unknown, 1 airliner, 2 GA, 3 heli, 4 mil.
 static int catClass(const String& c) {
   if (c == "A3" || c == "A4" || c == "A5") return 1;          // large/heavy
@@ -649,6 +680,13 @@ void PageAircraft::draw(App& app) {
     }
   }
 
+  // Blip callsign labels near the E edge overhang the radar's clear box into the gap before
+  // the info column, and nothing else repaints that strip, so wipe it after the blips draw.
+  {
+    int gx = cx + R + 4 * u, gw = cw / 2 + 8 * u - gx;
+    if (gw > 0) g.fillRect(gx, cy - R - 10 * u, gw, 2 * R + 20 * u, gTheme.bg);
+  }
+
   // Info column.
   int ix = cw / 2 + 8 * u, iy = top + 6 * u;
   g.setTextDatum(textdatum_t::top_left);
@@ -695,6 +733,7 @@ void PageAircraft::draw(App& app) {
       const char* em = squawkAlert(a.squawk);
       line(String("squawk ") + a.squawk + (em ? String("  ") + em : String()), em ? gTheme.warn : gTheme.dim);
     }
+    if (const char* al = airlineName(a.flight)) line(al, gTheme.fg);
   }
 
   drawAirportMarquee(app);

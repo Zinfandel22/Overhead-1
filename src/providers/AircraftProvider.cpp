@@ -86,15 +86,29 @@ void AircraftProvider::poll() {
     String host = _s->getString("adsbHost", "");
     if (!host.length()) { _status = ProviderStatus::Error; return; }
     url = "http://" + host + "/data/aircraft.json";
+    _srcName = "local";
   } else {
     // Cloud feed over HTTPS. adsb.lol now 301-redirects plain HTTP to HTTPS (HTTPClient
     // can't follow an http->https hop), so the TLS handshake is unavoidable. NetClient
     // skips the fetch (code -3) while the largest free block is under its TLS floor; we
     // retry quickly on failure (see _retryGapMs) until the heap allows it.
-    char b[96];
-    snprintf(b, sizeof(b), "https://api.adsb.lol/v2/point/%.4f/%.4f/%d",
-             centerLat(), centerLon(), (int)_radiusNm);
+    char b[110];
+    // Skip sources parked after a 403 (airplanes.live needs approval); capsule-radar does
+    // the same. Only the last-resort adsb.lol is never parked.
+    for (int i = 0; i < 3 && _parkUntilMs[_src] && (int32_t)(nowMs - _parkUntilMs[_src]) < 0; ++i)
+      _src = (_src + 1) % 3;
+    if (_parkUntilMs[_src] && (int32_t)(nowMs - _parkUntilMs[_src]) < 0) { _lastPollMs = nowMs; return; }
+    if (_src == 0)
+      snprintf(b, sizeof(b), "https://api.adsb.lol/v2/point/%.4f/%.4f/%d",
+               centerLat(), centerLon(), (int)_radiusNm);
+    else if (_src == 1)
+      snprintf(b, sizeof(b), "https://opendata.adsb.fi/api/v2/lat/%.4f/lon/%.4f/dist/%d",
+               centerLat(), centerLon(), (int)_radiusNm);
+    else
+      snprintf(b, sizeof(b), "https://api.airplanes.live/v2/point/%.4f/%.4f/%d",
+               centerLat(), centerLon(), (int)_radiusNm);
     url = b;
+    _srcName = _src == 0 ? "adsb.lol" : _src == 1 ? "adsb.fi" : "airplanes";
   }
 
   _inflight = true;
@@ -111,6 +125,8 @@ void AircraftProvider::poll() {
         _ac = std::move(_acStaging); _acStaging.clear(); _staged = false;
         _lastFetched = (uint32_t)time(nullptr);
         _retryGapMs = 0;
+        _failStreak = 0;                         // stay on whichever source just worked
+        _park403Ms[_src] = 0;                    // a good answer clears the 403 escalation
         _status = ProviderStatus::Ready;
         Serial.printf("[adsb] ok: %u contacts%s\n", (unsigned)_ac.size(),
                       prev != ProviderStatus::Ready ? "  (recovered)" : "");
@@ -118,11 +134,28 @@ void AircraftProvider::poll() {
         // code -3 = heap-floor TLS skip, 429 = rate limited, <0 = connect/timeout,
         // or a parse miss. Keep the last contacts (Stale). Retry soon: the heap floor
         // usually clears within seconds, and a -3 skip costs nothing.
-        if (code == 429) {                       // rate limited: back off, doubling up to 5 min
-          uint32_t next = _retryGapMs ? _retryGapMs * 2 : 30000u;
-          _retryGapMs = next > kMaxBackoffMs ? kMaxBackoffMs : next;
+        if (code == -3) {                        // heap skip: not the source's fault
+          _retryGapMs = 5000u;
         } else {
-          _retryGapMs = (code == -3) ? 5000u : 15000u;
+          if (code == 403) {                     // policy refusal: park 15 min, doubling to 6 h
+            uint32_t p = _park403Ms[_src] ? _park403Ms[_src] * 2 : 900000u;
+            if (p > 21600000u) p = 21600000u;
+            _park403Ms[_src] = p;
+            _parkUntilMs[_src] = millis() + p;
+            Serial.printf("[adsb] source %u parked for %us after HTTP 403\n", (unsigned)_src, (unsigned)(p / 1000));
+          }
+          // Real failure: switch to the next source and try it quickly. Only once all
+          // have failed back-to-back do we back off (doubling on 429, up to 5 min).
+          _src = (_src + 1) % 3;
+          if (_failStreak < 255) _failStreak++;
+          if (_failStreak < 3) {
+            _retryGapMs = 3000u;
+          } else if (code == 429) {
+            uint32_t next = _retryGapMs >= 30000u ? _retryGapMs * 2 : 30000u;
+            _retryGapMs = next > kMaxBackoffMs ? kMaxBackoffMs : next;
+          } else {
+            _retryGapMs = 15000u;
+          }
         }
         _status = _ac.empty() ? ProviderStatus::Error : ProviderStatus::Stale;
         const char* why = code == -3 ? "TLS heap floor skip" : code == -1 ? "wifi down"
@@ -130,10 +163,11 @@ void AircraftProvider::poll() {
                         : code == 200 ? (s_parseWhy[0] ? s_parseWhy : "parse produced nothing")
                         : code == 429 ? "rate limited" : code == 301 || code == 302 ? "redirect not followed"
                         : "http error";
-        Serial.printf("[adsb] FAIL code=%d (%s) heap=%u blk=%u keep=%u retry=%ums state %d->%d\n",
+        Serial.printf("[adsb] FAIL code=%d (%s) heap=%u blk=%u keep=%u retry=%ums next=%s state %d->%d\n",
                       code, why, (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                      (unsigned)_ac.size(), (unsigned)_retryGapMs, (int)prev, (int)_status);
+                      (unsigned)_ac.size(), (unsigned)_retryGapMs, _src == 0 ? "adsb.lol" : _src == 1 ? "adsb.fi" : "airplanes",
+                      (int)prev, (int)_status);
       }
       if (_bus) _bus->publish(ProviderId::Aircraft);
     },
@@ -171,10 +205,10 @@ void AircraftProvider::parseStream(Stream& body) {
     return;
   }
 
-  // Advance the stream to the start of the aircraft array. adsb.lol / airplanes.live
-  // use "ac"; tar1090 / readsb use "aircraft". "ac" is a prefix of "aircraft", so
-  // find("\"ac") lands on either key; then walk to the array's opening '['.
-  if (!body.find((char*)"\"ac")) { s_parseWhy = "no \"ac\" key in body (timeout/empty/non-JSON)"; return; }
+  // Advance the stream to the start of the aircraft array. adsb.lol uses "ac"; adsb.fi and
+  // tar1090 / readsb use "aircraft". Match the shared `"a` prefix (the array is the first
+  // key starting with "a"), then walk to the array's opening '['.
+  if (!body.find((char*)"\"a")) { s_parseWhy = "no aircraft array key in body (timeout/empty/non-JSON)"; return; }
   if (!body.find((char*)"["))   { s_parseWhy = "no array after \"ac\""; return; }
 
   // Per-ELEMENT filter: only the fields we actually use. Applied to each object as

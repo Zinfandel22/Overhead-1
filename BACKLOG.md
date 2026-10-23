@@ -33,6 +33,18 @@ move out on the next sweep.
   buffers), so its old 20 KB check always failed even on HTTP 200. Lowered to 6 KB.
 - **Rate limiting:** adsb.lol returns 429. Foreground poll is 15 s (background 60 s); a 429
   backs off 30 s, doubling to a 5 min cap; other failures retry at 5 s (heap skip) / 15 s.
+- **Multiple sources (adsb.lol, adsb.fi, airplanes.live):** on a real failure (429,
+  connect/TLS error, bad status or empty parse) the provider rotates adsb.lol →
+  `https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{nm}` → `api.airplanes.live` and
+  retries after 3 s; the working source sticks. Only after all three fail back-to-back does it
+  back off. A heap skip (-3) never switches source. adsb.fi sends `Transfer-Encoding: chunked`,
+  so `NetClient` wraps the stream in a chunk decoder when there is no `Content-Length`; the
+  parser matches the `"a` key prefix because adsb.lol uses `ac` and adsb.fi uses `aircraft`.
+  The Health screen shows the source of the latest fetch next to the age.
+- **403 parking:** airplanes.live returned 403 "contact us" (approval needed) in Oct 2026. A
+  source that answers 403 is parked for 15 min, doubling to 6 h, and skipped by the rotation;
+  a good fetch resets it. This mirrors capsule-radar, which parks 403s the same way.
+  Untested on hardware; flash is 98.5% of the app slot.
 - **Diagnostics:** serial now logs `[adsb] fetch`, `parse start blk=`, `ok: N contacts` or
   `FAIL code=… (reason) heap= blk= state a->b`, plus `[net] GET failed` for connect/TLS errors.
 - **Still open:** other HTTPS feeds (NASA, Open-Meteo, aviationweather) are still skipped at the
@@ -243,7 +255,7 @@ scans on demand; refresh over /api/fs, no reflash); dead-reckon blips between AD
 updates; alt/category filter chips; hide-on-ground; range steps; recenter-on-nearby-
 airport; tap-on-blip; emergency squawk.
 - Callsign labels on the (unselected) radar blips.
-- Local-feeder auto-discovery / mDNS; adsb.lol secondary source.
+- Local-feeder auto-discovery / mDNS. (adsb.fi secondary source: done, Oct 2026.)
 - Flicker: radar still clears its circle bbox each tick — per-blip erase or a PSRAM sprite.
 - Airport dataset is US-only; for worldwide, regenerate gen_airports.py without the
   US filter (LittleFS has room) — watch scan time + the marquee string length.
